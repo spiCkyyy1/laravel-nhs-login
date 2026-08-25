@@ -1,0 +1,63 @@
+{
+    "name": "spickyyy1/laravel-nhs-login",
+    "description": "NHS login (OIDC) authentication for Laravel: a Socialite provider with private_key_jwt client authentication, RS512 ID token verification and Vectors of Trust support.",
+    "keywords": [
+        "laravel",
+        "socialite",
+        "nhs",
+        "nhs-login",
+        "oidc",
+        "openid-connect",
+        "healthcare",
+        "uk"
+    ],
+    "homepage": "https://github.com/spiCkyyy1/laravel-nhs-login",
+    "license": "MIT",
+    "require": {
+        "php": "^8.2",
+        "ext-json": "*",
+        "ext-openssl": "*",
+        "firebase/php-jwt": "^6.10|^7.0",
+        "illuminate/contracts": "^11.0|^12.0|^13.0",
+        "illuminate/support": "^11.0|^12.0|^13.0",
+        "laravel/socialite": "^5.30"
+    },
+    "require-dev": {
+        "larastan/larastan": "^3.0",
+        "laravel/pint": "^1.27",
+        "orchestra/testbench": "^9.0|^10.0|^11.0",
+        "pestphp/pest": "^3.0",
+        "pestphp/pest-plugin-laravel": "^3.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Spickyyy1\\NhsLogin\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Spickyyy1\\NhsLogin\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "vendor/bin/pest",
+        "test:coverage": "vendor/bin/pest --coverage",
+        "lint": "vendor/bin/pint",
+        "analyse": ["vendor/bin/phpstan analyse --memory-limit=512M", "vendor/bin/phpstan analyse -c phpstan.tests.neon --memory-limit=512M"]
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Spickyyy1\\NhsLogin\\NhsLoginServiceProvider"
+            ]
+        }
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        }
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true
+}

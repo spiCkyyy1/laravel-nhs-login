@@ -1,0 +1,22 @@
+# The test suite, analysed for real mistakes rather than annotation coverage.
+#
+# Kept at a lower level than src on purpose: Pest's dynamic style — global
+# helper functions, $this bound at runtime, constants declared in Pest.php —
+# produces a great deal of noise at level 6 and almost no signal. Level 4 still
+# catches the things that matter here: undefined methods and classes, wrong
+# argument counts, and calls that cannot succeed.
+includes:
+    - vendor/larastan/larastan/extension.neon
+parameters:
+    level: 4
+    paths:
+        - tests
+    ignoreErrors:
+        # Pest binds $this and test() to the running TestCase at runtime, which
+        # no amount of annotation makes visible to static analysis. Ignoring
+        # the binding itself keeps everything else — undefined classes, wrong
+        # argument counts, bad types in the helper classes — still checked.
+        - identifier: method.notFound
+          message: '#Call to an undefined method (PHPUnit\\Framework\\TestCase|Pest\\PendingCalls\\TestCall\|Pest\\Support\\HigherOrderTapProxy)::#'
+        - identifier: property.notFound
+          message: '#Access to an undefined property PHPUnit\\Framework\\TestCase::#'
