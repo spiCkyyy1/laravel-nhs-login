@@ -13,6 +13,16 @@
     ],
     "homepage": "https://github.com/spiCkyyy1/laravel-nhs-login",
     "license": "MIT",
+    "authors": [
+        {
+            "name": "Hassam Waheed",
+            "email": "spickyyy@gmail.com"
+        }
+    ],
+    "support": {
+        "issues": "https://github.com/spiCkyyy1/laravel-nhs-login/issues",
+        "source": "https://github.com/spiCkyyy1/laravel-nhs-login"
+    },
     "require": {
         "php": "^8.2",
         "ext-json": "*",

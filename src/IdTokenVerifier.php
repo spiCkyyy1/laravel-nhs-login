@@ -47,6 +47,38 @@ final class IdTokenVerifier
     }
 
     /**
+     * Verify an ID token returned alongside a refreshed access token.
+     *
+     * NHS login is not obliged to return a new ID token on a refresh grant,
+     * so the caller only reaches this when one was actually sent — an absent
+     * one is not a failure here, it just means the caller has nothing new to
+     * verify. The nonce from the original authorisation request does not
+     * apply to a refresh: RFC 6749's refresh grant carries no nonce to check
+     * it against. What OIDC Core 12.2 asks for instead is that the token
+     * still names this client and, when the caller can say who it expected,
+     * the same subject as before — without that, a token swapped in for a
+     * different NHS number would sail through unchecked.
+     *
+     * @return array<string, mixed> the verified claims
+     *
+     * @throws InvalidIdToken
+     */
+    public function verifyRefreshed(string $idToken, Environment $environment, ?string $expectedSubject): array
+    {
+        $claims = $this->decode($idToken, $this->keysFor($idToken, $environment));
+
+        $this->assertIssuer($claims, $environment);
+        $this->assertAudience($claims);
+        $this->assertExpiry($claims);
+
+        if ($expectedSubject !== null) {
+            $this->assertSubject($claims, $expectedSubject);
+        }
+
+        return $claims;
+    }
+
+    /**
      * @param  array<string, Key>  $keys
      * @return array<string, mixed>
      *
@@ -178,6 +210,18 @@ final class IdTokenVerifier
 
         if (! hash_equals($expectedNonce, $nonce)) {
             throw InvalidIdToken::nonceMismatch();
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $claims
+     */
+    private function assertSubject(array $claims, string $expectedSubject): void
+    {
+        $subject = isset($claims['sub']) ? (string) $claims['sub'] : '';
+
+        if ($subject === '' || ! hash_equals($expectedSubject, $subject)) {
+            throw InvalidIdToken::refreshedSubjectMismatch();
         }
     }
 }

@@ -70,7 +70,8 @@ final class MockIssuerController
             return $this->deny($request, 'unsupported_response_type', 'Only response_type=code is supported.');
         }
 
-        $scopes = explode(' ', (string) $request->query('scope', ''));
+        $scopeParam = $request->query('scope', '');
+        $scopes = explode(' ', is_string($scopeParam) ? $scopeParam : '');
 
         if (! in_array('openid', $scopes, strict: true)) {
             return $this->deny($request, 'invalid_scope', 'The openid scope is required.');
@@ -131,37 +132,65 @@ final class MockIssuerController
                 $request->input('client_assertion_type'),
             );
 
-            if ($request->input('grant_type') !== 'authorization_code') {
-                throw MockIssuerRejection::invalidRequest('Only grant_type=authorization_code is supported.');
-            }
-
-            $grant = $this->issuer->claimCode((string) $request->input('code', ''));
-
-            if ($grant === null) {
-                throw MockIssuerRejection::invalidGrant(
-                    'Unknown, expired or already-used authorisation code.',
-                );
-            }
-
-            if ($request->input('redirect_uri') !== $grant['redirect_uri']) {
-                throw MockIssuerRejection::invalidGrant(
-                    'The redirect_uri does not match the one the code was issued for.',
-                );
-            }
-
-            return new JsonResponse($this->issuer->issueTokens(
-                $grant['claims'],
-                $grant['nonce'],
-                $grant['scope'],
-            ));
+            return new JsonResponse(match ($request->input('grant_type')) {
+                'authorization_code' => $this->exchangeAuthorizationCode($request),
+                'refresh_token' => $this->exchangeRefreshToken($request),
+                default => throw MockIssuerRejection::invalidRequest(
+                    'Only grant_type=authorization_code and grant_type=refresh_token are supported.',
+                ),
+            });
         } catch (MockIssuerRejection $e) {
             return $e->toResponse();
         }
     }
 
+    /**
+     * @return array<string, mixed>
+     *
+     * @throws MockIssuerRejection
+     */
+    private function exchangeAuthorizationCode(Request $request): array
+    {
+        $grant = $this->issuer->claimCode((string) $request->input('code', ''));
+
+        if ($grant === null) {
+            throw MockIssuerRejection::invalidGrant(
+                'Unknown, expired or already-used authorisation code.',
+            );
+        }
+
+        if ($request->input('redirect_uri') !== $grant['redirect_uri']) {
+            throw MockIssuerRejection::invalidGrant(
+                'The redirect_uri does not match the one the code was issued for.',
+            );
+        }
+
+        return $this->issuer->issueTokens($grant['claims'], $grant['nonce'], $grant['scope']);
+    }
+
+    /**
+     * @return array<string, mixed>
+     *
+     * @throws MockIssuerRejection
+     */
+    private function exchangeRefreshToken(Request $request): array
+    {
+        $refreshToken = (string) $request->input('refresh_token', '');
+        $grant = $refreshToken === '' ? null : $this->issuer->redeemRefreshToken($refreshToken);
+
+        if ($grant === null) {
+            throw MockIssuerRejection::invalidGrant('Unknown, expired or already-used refresh token.');
+        }
+
+        // No nonce: RFC 6749's refresh grant carries none, and the ID token
+        // NHS login returns here — like the mock's — is verified without one.
+        return $this->issuer->issueTokens($grant['claims'], null, $grant['scope']);
+    }
+
     public function userInfo(Request $request): JsonResponse
     {
-        $token = Str::after((string) $request->header('Authorization'), 'Bearer ');
+        $authorization = $request->header('Authorization');
+        $token = Str::after(is_string($authorization) ? $authorization : '', 'Bearer ');
         $claims = $token === '' ? null : $this->issuer->userInfo($token);
 
         return $claims === null

@@ -20,11 +20,32 @@ $user->isIdentityVerified();      // true
 $user->birthdate();               // Carbon instance
 ```
 
+## Contents
+
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Routes](#routes)
+- [Identity levels and Vectors of Trust](#identity-levels-and-vectors-of-trust)
+- [Scopes](#scopes)
+- [Stateless use](#stateless-use)
+- [Claims](#claims)
+- [Refreshing a session](#refreshing-a-session)
+- [Audit events](#audit-events)
+- [What gets verified](#what-gets-verified)
+- [Handling failures](#handling-failures)
+- [Security notes](#security-notes)
+- [Local development](#local-development)
+- [Testing](#testing)
+- [Compatibility](#compatibility)
+
 ## Installation
 
 ```bash
 composer require spickyyy1/laravel-nhs-login
 ```
+
+Requires PHP 8.2+ and Laravel 11, 12 or 13. See [Compatibility](#compatibility) for the Socialite
+version note if you're on Laravel 13.
 
 Publish the config if you want to change the defaults:
 
@@ -165,6 +186,52 @@ with `claim()`:
 $nhsUser->claim('delegations');
 ```
 
+## Refreshing a session
+
+NHS login's token endpoint issues a refresh token alongside the access and ID token. Redeem one
+with `refreshToken()`, which authenticates the same way as everything else in this package —
+there is still no client secret to post:
+
+```php
+$token = Socialite::driver('nhslogin')->refreshToken($user->refreshToken, $user->getId());
+
+$token->token;          // the new access token
+$token->refreshToken;   // persist this — NHS login may or may not rotate it on use
+$token->idTokenClaims;  // null unless NHS login returned a new ID token
+```
+
+The second argument is optional but worth passing when you have it — typically the `sub` the
+local account is keyed on. NHS login is not obliged to return a new ID token on a refresh; when it
+does, it is verified the same way the original one was, and passing the expected subject catches a
+token that has been swapped in for someone else. When it does not, `idTokenClaims` is `null`: a
+refresh proves the session is still live, not anything new about identity, so nothing about the
+user has to be — or can be — re-checked.
+
+## Audit events
+
+`NhsLoginAuthenticated` and `NhsLoginAuthenticationFailed` are dispatched on every call to
+`user()`, so an audit trail (DCB0129, DSPT) doesn't depend on every application remembering to
+build one:
+
+```php
+Event::listen(function (NhsLoginAuthenticated $event) {
+    Log::info('NHS login succeeded', [
+        'subject' => $event->subject,
+        'level' => $event->identityProofingLevel->value,
+    ]);
+});
+
+Event::listen(function (NhsLoginAuthenticationFailed $event) {
+    Log::info('NHS login attempt failed', ['exception' => $event->exception::class]);
+});
+```
+
+`NhsLoginAuthenticationFailed` fires for a cancelled login too — check
+`$event->exception instanceof AuthorisationFailed && $event->exception->wasCancelled()` before
+treating it as something worth alerting on, for the same reason `wasCancelled()` exists at all.
+Both events carry safe, already-sanitised data by design; see their docblocks before logging
+anything beyond what they expose.
+
 ## What gets verified
 
 Every login verifies the ID token before building a user:
@@ -227,6 +294,9 @@ trains people to distrust the button.
   retiring the old one.
 - Error details from the callback are sanitised before they reach an exception message: they are
   query parameters, so anyone who can send a user to your callback URL controls them.
+- NHS login's discovery document publishes no `end_session_endpoint`, so there is no RP-initiated
+  logout to call — logging a user out of your application does not, and cannot, log them out of
+  NHS login. Do not build a "log out" button that promises otherwise.
 
 ## Local development
 

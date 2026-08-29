@@ -7,6 +7,7 @@ namespace Spickyyy1\NhsLogin;
 use GuzzleHttp\Client;
 use Illuminate\Container\Container as ConcreteContainer;
 use Illuminate\Contracts\Container\Container;
+use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Contracts\Foundation\CachesRoutes;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
@@ -27,7 +28,7 @@ final class NhsLoginServiceProvider extends ServiceProvider
         $this->mergeConfigFrom(__DIR__.'/../config/nhs-login.php', 'nhs-login');
 
         $this->app->singleton(Environment::class, static function (Container $app): Environment {
-            $config = $app['config']->get('nhs-login');
+            $config = $app->make('config')->get('nhs-login');
 
             return Environment::resolve(
                 (string) $config['environment'],
@@ -37,18 +38,18 @@ final class NhsLoginServiceProvider extends ServiceProvider
         });
 
         $this->app->singleton(JwksResolver::class, static function (Container $app): JwksResolver {
-            $config = $app['config']->get('nhs-login');
+            $config = $app->make('config')->get('nhs-login');
 
             return new JwksResolver(
                 new Client(['timeout' => (int) $config['timeout']]),
-                $app['cache']->store($config['jwks_cache_store']),
+                $app->make('cache')->store($config['jwks_cache_store']),
                 (int) $config['jwks_ttl'],
                 (int) ($config['jwks_refresh_cooldown'] ?? 60),
             );
         });
 
         $this->app->singleton(ClientAssertion::class, static function (Container $app): ClientAssertion {
-            $config = $app['config']->get('nhs-login');
+            $config = $app->make('config')->get('nhs-login');
 
             return new ClientAssertion(
                 clientId: self::clientId($config),
@@ -62,7 +63,7 @@ final class NhsLoginServiceProvider extends ServiceProvider
         $this->registerMockIssuer();
 
         $this->app->singleton(IdTokenVerifier::class, static function (Container $app): IdTokenVerifier {
-            $config = $app['config']->get('nhs-login');
+            $config = $app->make('config')->get('nhs-login');
 
             return new IdTokenVerifier(
                 jwks: $app->make(JwksResolver::class),
@@ -90,10 +91,10 @@ final class NhsLoginServiceProvider extends ServiceProvider
     private function registerMockIssuer(): void
     {
         $this->app->singleton(MockIssuer::class, static function (Container $app): MockIssuer {
-            $config = $app['config']->get('nhs-login');
+            $config = $app->make('config')->get('nhs-login');
 
             return new MockIssuer(
-                cache: $app['cache']->store($config['jwks_cache_store']),
+                cache: $app->make('cache')->store($config['jwks_cache_store']),
                 environment: $app->make(Environment::class),
                 clientId: self::clientId($config),
                 clientPublicKey: PrivateKey::publicKey(
@@ -104,7 +105,7 @@ final class NhsLoginServiceProvider extends ServiceProvider
         });
 
         $this->app->singleton(MockIssuerController::class, static function (Container $app): MockIssuerController {
-            $config = $app['config']->get('nhs-login');
+            $config = $app->make('config')->get('nhs-login');
 
             return new MockIssuerController(
                 issuer: $app->make(MockIssuer::class),
@@ -125,7 +126,7 @@ final class NhsLoginServiceProvider extends ServiceProvider
      */
     private function registerMockRoutes(): void
     {
-        $config = $this->app['config']->get('nhs-login.mock');
+        $config = $this->app->make('config')->get('nhs-login.mock');
 
         if (! ($config['enabled'] ?? false)) {
             return;
@@ -157,13 +158,13 @@ final class NhsLoginServiceProvider extends ServiceProvider
         // would sit there unreachable while real logins failed.
         $real = array_map(
             static fn (string $candidate): string => rtrim($candidate, '/'),
-            $this->app['config']->get('nhs-login.issuers', []),
+            $this->app->make('config')->get('nhs-login.issuers', []),
         );
 
         if (in_array($issuer, $real, strict: true)) {
             throw NhsLoginConfigurationException::mockIssuerNotLocal(
                 $issuer,
-                rtrim((string) $this->app['config']->get('app.url'), '/').'/'.$prefix,
+                rtrim((string) $this->app->make('config')->get('app.url'), '/').'/'.$prefix,
             );
         }
 
@@ -218,7 +219,7 @@ final class NhsLoginServiceProvider extends ServiceProvider
      */
     private function createProvider(): NhsLoginProvider
     {
-        $config = $this->app['config']->get('nhs-login');
+        $config = $this->app->make('config')->get('nhs-login');
 
         $provider = new NhsLoginProvider(
             request: $this->app->make('request'),
@@ -228,6 +229,7 @@ final class NhsLoginServiceProvider extends ServiceProvider
             environment: $this->app->make(Environment::class),
             assertion: $this->app->make(ClientAssertion::class),
             verifier: $this->app->make(IdTokenVerifier::class),
+            events: $this->app->make(Dispatcher::class),
             guzzle: ['timeout' => (int) $config['timeout']],
         );
 

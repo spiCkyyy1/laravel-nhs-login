@@ -45,6 +45,14 @@ final class InvalidIdToken extends NhsLoginException
         );
     }
 
+    public static function refreshedSubjectMismatch(): self
+    {
+        return new self(
+            'The ID token returned alongside a refreshed access token names a different subject '
+            .'than expected. The refresh must be rejected rather than trusted for the wrong person.',
+        );
+    }
+
     public static function nonceMismatch(): self
     {
         return new self(

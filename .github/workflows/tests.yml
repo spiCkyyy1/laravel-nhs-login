@@ -57,3 +57,29 @@ jobs:
       - run: vendor/bin/phpstan analyse -c phpstan.tests.neon --no-progress --memory-limit=512M
 
       - run: vendor/bin/pint --test
+
+  coverage:
+    runs-on: ubuntu-latest
+    name: Coverage
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: json, openssl
+          coverage: pcov
+
+      - run: composer install --prefer-dist --no-interaction
+
+      # No --min gate yet: run `composer test:coverage` locally, decide a
+      # floor once you have looked at the actual number, then add it here.
+      # A threshold guessed from a CI log nobody read is how a release ends
+      # up blocked for a reason nobody remembers.
+      - run: vendor/bin/pest --coverage --coverage-clover=coverage.xml
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml

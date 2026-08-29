@@ -61,3 +61,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failed on the first real call without it.
 - ID token leeway is restored after decoding, so it never leaks into other code decoding JWTs.
 - The `*_verified` claims are read as booleans, so the string `"false"` does not read as true.
+- `refreshToken()`, redeeming a refresh token the way every other call to the token endpoint
+  authenticates: `private_key_jwt`, never the client secret Socialite's own implementation posts.
+  Verifies a returned ID token the same way the original login's was, including an optional check
+  that the subject has not changed.
+- `NhsLoginAuthenticated` and `NhsLoginAuthenticationFailed`, dispatched on every `user()` call, so
+  the audit trail clinical services are expected to keep (DCB0129, DSPT) does not depend on every
+  application building its own.
+- Static analysis raised from PHPStan level 6 to level 8.
+- A `coverage` CI job, uploading a Clover report as a build artifact. Not gated on a `--min`
+  threshold yet — see the workflow file for why guessing one is worse than not having it.
+- README documents that NHS login publishes no `end_session_endpoint`: there is no RP-initiated
+  logout to call, and no "log out" button can honestly promise one.

@@ -6,18 +6,23 @@ namespace Spickyyy1\NhsLogin;
 
 use GuzzleHttp\Exception\BadResponseException;
 use GuzzleHttp\RequestOptions;
+use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Str;
 use Laravel\Socialite\Two\AbstractProvider;
 use Laravel\Socialite\Two\InvalidStateException;
 use Laravel\Socialite\Two\ProviderInterface;
+use Spickyyy1\NhsLogin\Events\NhsLoginAuthenticated;
+use Spickyyy1\NhsLogin\Events\NhsLoginAuthenticationFailed;
 use Spickyyy1\NhsLogin\Exceptions\AuthorisationFailed;
 use Spickyyy1\NhsLogin\Exceptions\InvalidIdToken;
 use Spickyyy1\NhsLogin\Exceptions\InvalidVectorOfTrust;
 use Spickyyy1\NhsLogin\Exceptions\TokenRequestFailed;
 use Spickyyy1\NhsLogin\Exceptions\UserInfoRequestFailed;
 use Spickyyy1\NhsLogin\Support\Environment;
+use Spickyyy1\NhsLogin\Support\NhsLoginToken;
 use Spickyyy1\NhsLogin\Support\VectorOfTrust;
+use Throwable;
 
 /**
  * Socialite provider for NHS login.
@@ -59,6 +64,7 @@ class NhsLoginProvider extends AbstractProvider implements ProviderInterface
         private readonly Environment $environment,
         private readonly ClientAssertion $assertion,
         private readonly IdTokenVerifier $verifier,
+        private readonly ?Dispatcher $events = null,
         array $guzzle = [],
     ) {
         parent::__construct($request, $clientId, $clientSecret, $redirectUrl, $guzzle);
@@ -139,6 +145,25 @@ class NhsLoginProvider extends AbstractProvider implements ProviderInterface
             return $this->user;
         }
 
+        try {
+            $user = $this->authenticate();
+        } catch (Throwable $e) {
+            // Dispatched for every failure mode, not only this package's own
+            // exceptions: an audit trail that only sees the failures it
+            // anticipated is not one worth keeping for DCB0129 or DSPT
+            // purposes.
+            $this->events?->dispatch(new NhsLoginAuthenticationFailed($e));
+
+            throw $e;
+        }
+
+        $this->events?->dispatch(new NhsLoginAuthenticated($user));
+
+        return $this->user = $user;
+    }
+
+    private function authenticate(): NhsLoginUser
+    {
         if ($this->hasInvalidState()) {
             throw new InvalidStateException;
         }
@@ -161,13 +186,72 @@ class NhsLoginProvider extends AbstractProvider implements ProviderInterface
         $user = $this->mapUserToObject($profile);
         $user->idTokenClaims = $claims;
 
-        $this->user = $user
+        $separator = $this->scopeSeparator !== '' ? $this->scopeSeparator : ' ';
+
+        return $user
             ->setToken(Arr::get($response, 'access_token'))
             ->setRefreshToken(Arr::get($response, 'refresh_token'))
             ->setExpiresIn(Arr::get($response, 'expires_in'))
-            ->setApprovedScopes(explode($this->scopeSeparator, (string) Arr::get($response, 'scope', '')));
+            ->setApprovedScopes(explode($separator, (string) Arr::get($response, 'scope', '')));
+    }
 
-        return $this->user;
+    /**
+     * Redeem a refresh token for a new access token.
+     *
+     * Overrides Socialite's version, which is otherwise unusable here: it
+     * posts a client_secret in getRefreshTokenResponse(), and NHS login does
+     * not accept one — every call to the token endpoint authenticates with
+     * the same signed assertion, this one included.
+     *
+     * When NHS login returns a new ID token alongside the refreshed access
+     * token, it is verified the same way the original one was: issuer,
+     * audience, expiry, and, when $expectedSubject is given — typically the
+     * `sub` the local account is keyed on — that the subject has not
+     * changed. NHS login is not obliged to return a new ID token on refresh;
+     * when it does not, idTokenClaims on the result is null, which only
+     * means the refresh proved the session is still live, not anything new
+     * about identity.
+     *
+     * @param  string  $refreshToken
+     *
+     * @throws TokenRequestFailed
+     * @throws InvalidIdToken
+     */
+    public function refreshToken($refreshToken, ?string $expectedSubject = null): NhsLoginToken
+    {
+        $response = $this->getRefreshTokenResponse($refreshToken);
+
+        $idToken = Arr::get($response, 'id_token');
+        $claims = is_string($idToken) && $idToken !== ''
+            ? $this->verifier->verifyRefreshed($idToken, $this->environment, $expectedSubject)
+            : null;
+
+        $newRefreshToken = Arr::get($response, 'refresh_token');
+        $separator = $this->scopeSeparator !== '' ? $this->scopeSeparator : ' ';
+        $scope = (string) Arr::get($response, 'scope', '');
+
+        return new NhsLoginToken(
+            token: (string) Arr::get($response, 'access_token', ''),
+            // NHS login may or may not rotate the refresh token on use; when
+            // it does not send a new one, the one just spent is still good.
+            refreshToken: is_string($newRefreshToken) && $newRefreshToken !== ''
+                ? $newRefreshToken
+                : (string) $refreshToken,
+            expiresIn: (int) Arr::get($response, 'expires_in', 0),
+            approvedScopes: $scope === '' ? [] : explode($separator, $scope),
+            idTokenClaims: $claims,
+        );
+    }
+
+    /**
+     * @param  string  $refreshToken
+     * @return array<string, mixed>
+     *
+     * @throws TokenRequestFailed
+     */
+    protected function getRefreshTokenResponse($refreshToken): array
+    {
+        return $this->postToTokenEndpoint($this->getRefreshTokenFields((string) $refreshToken));
     }
 
     protected function getAuthUrl($state): string
@@ -214,10 +298,21 @@ class NhsLoginProvider extends AbstractProvider implements ProviderInterface
     }
 
     /**
+     * @return array<string, mixed>
+     */
+    private function getRefreshTokenFields(string $refreshToken): array
+    {
+        return [
+            'grant_type' => 'refresh_token',
+            'refresh_token' => $refreshToken,
+            'client_id' => $this->clientId,
+            'client_assertion_type' => ClientAssertion::TYPE,
+            'client_assertion' => $this->assertion->create($this->environment->tokenEndpoint()),
+        ];
+    }
+
+    /**
      * Exchange the code, turning a rejection into something diagnosable.
-     *
-     * Transport failures are left to Guzzle — a refused connection is not NHS
-     * login saying no, and pretending otherwise would hide the difference.
      *
      * @return array<string, mixed>
      *
@@ -225,10 +320,29 @@ class NhsLoginProvider extends AbstractProvider implements ProviderInterface
      */
     public function getAccessTokenResponse($code): array
     {
+        return $this->postToTokenEndpoint($this->getTokenFields($code));
+    }
+
+    /**
+     * Post to the token endpoint, turning a rejection into something
+     * diagnosable.
+     *
+     * Transport failures are left to Guzzle — a refused connection is not NHS
+     * login saying no, and pretending otherwise would hide the difference.
+     * Shared by the authorization_code exchange and the refresh_token grant:
+     * both authenticate the same way and fail the same way.
+     *
+     * @param  array<string, mixed>  $fields
+     * @return array<string, mixed>
+     *
+     * @throws TokenRequestFailed
+     */
+    private function postToTokenEndpoint(array $fields): array
+    {
         try {
             $response = $this->getHttpClient()->post($this->getTokenUrl(), [
                 RequestOptions::HEADERS => ['Accept' => 'application/json'],
-                RequestOptions::FORM_PARAMS => $this->getTokenFields($code),
+                RequestOptions::FORM_PARAMS => $fields,
             ]);
         } catch (BadResponseException $e) {
             throw TokenRequestFailed::fromResponse($e->getResponse(), $e);

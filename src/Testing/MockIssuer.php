@@ -41,6 +41,7 @@ final class MockIssuer
         private readonly string $clientPublicKey,
         private readonly int $codeTtl = 300,
         private readonly int $tokenTtl = 3600,
+        private readonly int $refreshTtl = 86400,
     ) {}
 
     public function issuer(): string
@@ -56,6 +57,13 @@ final class MockIssuer
     public function jwks(): array
     {
         $details = openssl_pkey_get_details($this->signingKey());
+
+        if ($details === false || ! isset($details['rsa']['n'], $details['rsa']['e'])) {
+            // Only reachable if the cached signing key was corrupted or is
+            // somehow not an RSA key; signingKey() already refuses to hand
+            // back a key that will not load.
+            throw MockIssuerRejection::serverError('The mock signing key could not be read as an RSA key.');
+        }
 
         return [
             'keys' => [[
@@ -160,6 +168,7 @@ final class MockIssuer
     public function issueTokens(array $claims, ?string $nonce, string $scope): array
     {
         $accessToken = Str::random(64);
+        $refreshToken = Str::random(64);
         $issuedAt = time();
 
         $idToken = array_filter([
@@ -174,14 +183,43 @@ final class MockIssuer
         ], static fn (mixed $value): bool => $value !== null);
 
         $this->cache->put(self::CACHE_PREFIX.'token.'.$accessToken, $claims, $this->tokenTtl);
+        $this->cache->put(self::CACHE_PREFIX.'refresh.'.$refreshToken, [
+            'claims' => $claims,
+            'scope' => $scope,
+        ], $this->refreshTtl);
 
         return [
             'access_token' => $accessToken,
+            'refresh_token' => $refreshToken,
             'token_type' => 'Bearer',
             'expires_in' => $this->tokenTtl,
             'scope' => $scope,
             'id_token' => $this->sign($idToken + $claims),
         ];
+    }
+
+    /**
+     * Redeem a refresh token, the way NHS login's private_key_jwt-only token
+     * endpoint accepts one — rotated on every use.
+     *
+     * Rotation here is a deliberate choice by the mock, not a documented fact
+     * about NHS login's own behaviour: it is the safer default to build an
+     * integration against, since a client that assumes a refresh token stays
+     * valid after use would only find out it does not the day that
+     * assumption happens to be wrong. issueTokens() always returns a fresh
+     * refresh_token for exactly this reason — see NhsLoginProvider::
+     * refreshToken(), which keeps the old one only if a response omits it.
+     *
+     * @return array<string, mixed>|null the stored grant, or null if the
+     *                                   token is unknown, expired, or
+     *                                   already spent
+     */
+    public function redeemRefreshToken(string $refreshToken): ?array
+    {
+        /** @var array<string, mixed>|null $grant */
+        $grant = $this->cache->pull(self::CACHE_PREFIX.'refresh.'.$refreshToken);
+
+        return $grant;
     }
 
     /**
